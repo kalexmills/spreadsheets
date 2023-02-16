@@ -23,12 +23,21 @@ var (
 type Spreadsheet struct {
 	// cells maps from CellID to cells.
 	cells map[CellID]*Cell
-	// refersTo maps cells to all cells directly referenced in its current expression. It is the inverse of referedFrom.
+	// refersTo maps cells to all cells directly referenced by its current expression. It is the inverse of referredFrom.
 	refersTo map[CellID]map[CellID]struct{}
-	// referedFrom maps cells to the set of all cells that reference them. It is the inverse of refersTo.
-	referedFrom map[CellID]map[CellID]struct{}
+	// referredFrom maps cells to the set of all cells that directly reference them. It is the inverse of refersTo.
+	referredFrom map[CellID]map[CellID]struct{}
 }
 
+func NewSpreadsheet() *Spreadsheet {
+	return &Spreadsheet{
+		cells:        make(map[CellID]*Cell),
+		refersTo:     make(map[CellID]map[CellID]struct{}),
+		referredFrom: make(map[CellID]map[CellID]struct{}),
+	}
+}
+
+// Cell represents a single cell of a spreadsheet.
 type Cell struct {
 	currValue int   // currValue is the current value of this cell
 	expr      *Expr // expr describes the expression used to compute
@@ -42,6 +51,9 @@ func (s *Spreadsheet) SetCellValue(cellID string, val any) error {
 	if err != nil {
 		return err
 	}
+	if _, ok := s.cells[cid]; !ok {
+		s.cells[cid] = &Cell{}
+	}
 	switch val := val.(type) {
 	case int:
 		s.cells[cid].expr = nil      // unset expr
@@ -53,11 +65,10 @@ func (s *Spreadsheet) SetCellValue(cellID string, val any) error {
 		}
 		s.cells[cid].expr = &expr  // set expr
 		s.cells[cid].currValue = 0 // unset value
-		s.refresh(cid)
 	default:
 		return fmt.Errorf("%w: only int and string are allowed", ErrValueType)
 	}
-	return nil
+	return s.refresh(cid)
 }
 
 // GetCellValue retrieves the value of the cell with the provided ID. An error is returned if the provided string could
@@ -71,16 +82,28 @@ func (s *Spreadsheet) GetCellValue(cellID string) (int, error) {
 	if !ok {
 		return 0, nil // empty cells always have a value of zero.
 	}
-	return cell.currValue, nil // all cell values are pre-computed by SetCellValue
+	return cell.currValue, nil // all cell values are pre-computed by SetCellValue during refresh.
 }
 
-// eval evaluates the provided expression. results reported by eval are only valid when called in topological order
-// during refresh. It does not track circular references on its own.
-func (s *Spreadsheet) eval(expr Expr) int {
+// eval evaluates the value of the provided cell.
+func (s *Spreadsheet) eval(cid CellID) int {
+	cell, ok := s.cells[cid]
+	if !ok {
+		return 0 // all missing cells have a value of 0.
+	}
+	if cell.expr == nil {
+		return cell.currValue
+	}
+	return s.evalExpr(*cell.expr)
+}
+
+// evalExpr evaluates the provided expression. results reported by evalExpr are only valid when cells are called in
+// topological order during refresh. evalExpr does not track circular references on its own.
+func (s *Spreadsheet) evalExpr(expr Expr) int {
 	switch expr := expr.(type) {
 	case BinaryExpr:
-		x := s.eval(expr.X)
-		y := s.eval(expr.Y)
+		x := s.evalExpr(expr.X)
+		y := s.evalExpr(expr.Y)
 		switch expr.Op {
 		case TokenAdd:
 			return x + y
@@ -90,45 +113,128 @@ func (s *Spreadsheet) eval(expr Expr) int {
 	case ConstExpr:
 		return expr.Value
 	case CellRefExpr:
-		cell := s.cells[expr.Ref]
-		return cell.currValue
+		if cell, ok := s.cells[expr.Ref]; ok {
+			return cell.currValue
+		}
+		return 0 // empty cells are zeroes.
 	}
 	return 0 // "unreachable" if parseExpr is valid
 }
 
 // refresh refreshes the spreadsheet, with the knowledge that cell cid was just updated.
-func (s *Spreadsheet) refresh(cid CellID) {
-	// update refersTo with new information (if needed)
+func (s *Spreadsheet) refresh(cid CellID) error {
 	cell, ok := s.cells[cid]
 	if !ok {
-		return
+		return nil // nothing to see here
 	}
+
+	// update refersTo and referredFrom (if needed)
 	if cell.expr != nil {
-		// unset referedFrom refs and clear out refersTo refs.
+		// unset referredFrom refs and clear out refersTo refs.
 		for ref := range s.refersTo[cid] {
-			delete(s.referedFrom[ref], cid)
+			delete(s.referredFrom[ref], cid)
 		}
 		maps.Clear(s.refersTo[cid])
 		// update the graph with new refs
 		for _, ref := range CellRefs(*cell.expr) {
-			s.refersTo[cid][ref] = struct{}{}
-			s.referedFrom[ref][cid] = struct{}{}
+			s.addCellReferral(cid, ref)
 		}
 	}
-	// get the ancestors, check for a cycle
 
-	// topological sort to traverse, check for cycles
+	// get start nodes; these are the cells transitively referring to cid which are not referred to by anyone else.
+	// They will form the start point of the topological sort we're about to do to ensure that we re-evaluate cells in
+	// the correct order.
+	roots := s.rootReferrers(cid)
+
+	// Topological sort to re-evaluate cells in the correct order & check for circular references at the same time.
+	order, err := s.topSort(roots)
+	if err != nil {
+		return err // circular reference detected; bail!
+		// TODO: be more user-friendly like Excel and allow circular references to exist.
+	}
+
+	// re-evaluate all the cells found in topological order.
+	for _, cid := range order {
+		if cell, ok := s.cells[cid]; ok {
+			cell.currValue = s.eval(cid)
+		}
+	}
+	return nil
 }
 
-// C3 =A1+B2
-//
-// A1->C3
-// B2->C3
+// addCellReferral adds edges to the graph so that source refers to target.
+func (s *Spreadsheet) addCellReferral(source, target CellID) {
+	if _, ok := s.refersTo[source]; !ok {
+		s.refersTo[source] = make(map[CellID]struct{})
+	}
+	if _, ok := s.referredFrom[target]; !ok {
+		s.referredFrom[target] = make(map[CellID]struct{})
+	}
 
-// greatestAncestors retrieves the greatest ancestors of the provided cell: cells that don't reference other cells.
-func (s Spreadsheet) greatestAncestors(cid CellID) []CellID {
-	// BFS in
-	return nil
+	s.refersTo[source][target] = struct{}{}
+	s.referredFrom[target][source] = struct{}{}
+}
+
+// rootReferrers retrieves all unreferenced cells which transitively refer to cid.
+func (s *Spreadsheet) rootReferrers(cid CellID) []CellID {
+	// BFS from cid over all ancestors to find starting cells
+	frontier := []CellID{cid}
+	seen := map[CellID]struct{}{cid: {}}
+	var startCells []CellID
+	for len(frontier) > 0 {
+		curr := frontier[0]
+		frontier = frontier[1:]
+		if referers, ok := s.referredFrom[curr]; !ok || len(referers) == 0 {
+			startCells = append(startCells, curr)
+		}
+
+		for referer := range s.referredFrom[curr] {
+			if _, sawReferer := seen[referer]; !sawReferer {
+				frontier = append(frontier, referer)
+				seen[referer] = struct{}{}
+			}
+		}
+	}
+	return startCells
+}
+
+var ErrCircRef = errors.New("circular reference detected")
+
+func (s *Spreadsheet) topSort(startNodes []CellID) ([]CellID, error) {
+	var result []CellID
+
+	perm := make(map[CellID]struct{})
+	temp := make(map[CellID]struct{})
+
+	// recursive DFS to perform a topological sort without destroying the graph structure.
+	var visit func(curr CellID) error
+	visit = func(curr CellID) error {
+		if _, permMark := perm[curr]; permMark {
+			return nil
+		}
+		if _, tempMark := temp[curr]; tempMark {
+			return ErrCircRef
+		}
+		temp[curr] = struct{}{}
+
+		for neighbor := range s.refersTo[curr] {
+			if err := visit(neighbor); err != nil {
+				return err
+			}
+		}
+		delete(temp, curr)
+		perm[curr] = struct{}{}
+		result = append(result, curr)
+		return nil
+	}
+
+	// visit each of the starting nodes
+	for _, node := range startNodes {
+		if err := visit(node); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 // CellID represents a column and row of our spreadsheet.
@@ -166,6 +272,8 @@ func ParseCellID(str string) (CellID, error) {
 
 // decodeRowExpr decodes a 'base-26' row expression into its equivalent integer, returning an error if it is unable to
 // do so.
+//
+// This func does not currently check for integer overflow.
 func decodeRowExpr(str string) (int, error) {
 	// TODO: check for 64-bit integer overflow; note that catching a panic doesn't work in production since
 	//       detecting integer overflow/underflow is disabled in production Go code.
@@ -190,11 +298,6 @@ func decodeRowExpr(str string) (int, error) {
 		currBase *= base
 	}
 	return sum - 1, nil
-}
-
-// String returns a string representation of this cellID.
-func (c CellID) String() string {
-	return "" // TODO: this; for debugging
 }
 
 // ColIdx provides the 0-based row index for this cell.

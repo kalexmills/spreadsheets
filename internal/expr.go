@@ -14,7 +14,8 @@ func ParseExpr(str string) (Expr, error) {
 	return parseExpr(tokens)
 }
 
-// tokenize tokenizes the provided expression into a slice of []Token.
+// tokenize tokenizes the provided expression into a list of tokens, returning a ErrExprParse if any unexpected
+// characters are found.
 func tokenize(str string) ([]Token, error) {
 	runes := []rune(str)
 	if runes[0] != '=' {
@@ -50,13 +51,14 @@ func tokenize(str string) ([]Token, error) {
 	return tokens, nil
 }
 
-// between is true iff lb <= target && target <= ub.
+// between is true iff target lies between lb (lower bound) and ub (upper bound).
 func between(target rune, lb, ub rune) bool {
 	return lb <= target && target <= ub
 }
 
-// parseExpr parses an expression using a recursive descent parser.
+// parseExpr parses the provided list of tokens into an expression.
 func parseExpr(tokens []Token) (Expr, error) {
+	// we're using a recursive descent parser because they're easy to understand, write, and extend.
 	if len(tokens) == 0 {
 		return nil, fmt.Errorf("%w: expected expression; found nothing", ErrExprParse)
 	}
@@ -94,7 +96,7 @@ func parseTerms(tokens []Token) (Expr, error) {
 	return nil, fmt.Errorf("%w: unexpected token: %s", ErrExprParse, tokens[0])
 }
 
-// binSplit splits the tokens at index i, continues parsing, and returns a BinExpr using the provided operator.
+// binExpr splits the tokens at index i, continues parsing, and returns a BinaryExpr using the provided binOp.
 func binExpr(i int, tokens []Token, binOp Token) (Expr, error) {
 	X, err := parseExpr(tokens[:i])
 	if err != nil {
@@ -107,11 +109,15 @@ func binExpr(i int, tokens []Token, binOp Token) (Expr, error) {
 	return BinaryExpr{X: X, Op: binOp, Y: Y}, nil
 }
 
+// the model used here for representing parse trees is inspired by the ast package in Go's standard library.
+
 // Expr is an interface describing an expression.
 type Expr interface {
-	IsExpr() // marker method, for type-safety.
+	IsExpr() // marker method, just for type-safety.
 }
 
+// BinaryExpr represents a binary expression, containing a token representing the operation, and left and right
+// operands.
 type BinaryExpr struct {
 	X  Expr  // left operand
 	Op Token // operation
@@ -120,12 +126,14 @@ type BinaryExpr struct {
 
 func (b BinaryExpr) IsExpr() {}
 
+// ConstExpr represents a constant valued expression.
 type ConstExpr struct {
 	Value int
 }
 
 func (b ConstExpr) IsExpr() {}
 
+// CellRefExpr represents a variable reference to another cell.
 type CellRefExpr struct {
 	Ref CellID
 }
