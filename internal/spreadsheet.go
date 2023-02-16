@@ -15,9 +15,10 @@ var (
 )
 
 // Spreadsheet represents a spreadsheet capable of setting and retrieving cell values. Cells in this spreadsheet store
-// integers. All cells start with a value of 0. Each cell contains either a raw value, or an expression in the format
+// integers. All cells start with a value of 0. Each cell contains either a raw integer value, or an expression in the
+// format
 //
-//	=A1+B2*C3
+//	=A1+B2*C3+12
 //
 // Only addition and multiplication are supported as binary operations.
 type Spreadsheet struct {
@@ -150,7 +151,7 @@ func (s *Spreadsheet) refresh(cid CellID) error {
 	order, err := s.topSort(roots)
 	if err != nil {
 		return err // circular reference detected; bail!
-		// TODO: be more user-friendly like Excel and allow circular references to exist.
+		// TODO: be more user-friendly like Excel and allow circular references to exist without throwing an error.
 	}
 
 	// re-evaluate all the cells found in topological order.
@@ -184,7 +185,7 @@ func (s *Spreadsheet) rootReferrers(cid CellID) []CellID {
 	for len(frontier) > 0 {
 		curr := frontier[0]
 		frontier = frontier[1:]
-		if referers, ok := s.referredFrom[curr]; !ok || len(referers) == 0 {
+		if referrers, ok := s.referredFrom[curr]; !ok || len(referrers) == 0 {
 			startCells = append(startCells, curr)
 		}
 
@@ -194,6 +195,9 @@ func (s *Spreadsheet) rootReferrers(cid CellID) []CellID {
 				seen[referer] = struct{}{}
 			}
 		}
+	}
+	if len(startCells) == 0 {
+		return []CellID{cid}
 	}
 	return startCells
 }

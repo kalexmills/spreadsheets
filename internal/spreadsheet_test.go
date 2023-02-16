@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -22,6 +23,61 @@ func TestSpreadsheet(t *testing.T) {
 		assertCellValue(t, s, "A1", 12)
 		assertCellValue(t, s, "A2", 12)
 		assertCellValue(t, s, "A3", 12)
+
+		assert.NoError(t, s.SetCellValue("A2", 24))
+		assertCellValue(t, s, "B1", 48)
+	})
+
+	t.Run("reference chain", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		assert.NoError(t, s.SetCellValue("A1", "=A2"))
+		assert.NoError(t, s.SetCellValue("A2", "=A3"))
+		assert.NoError(t, s.SetCellValue("A3", "=A4"))
+		assert.NoError(t, s.SetCellValue("A4", "=A5"))
+		assert.NoError(t, s.SetCellValue("A5", "=A6"))
+		assert.NoError(t, s.SetCellValue("A6", "=A7"))
+		assert.NoError(t, s.SetCellValue("A7", 12))
+
+		assertCellValue(t, s, "A1", 12)
+	})
+
+	t.Run("fibonacci", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		assert.NoError(t, s.SetCellValue("A1", 0))
+		assert.NoError(t, s.SetCellValue("A2", 1))
+		for i := 3; i < 15; i++ {
+			cell := fmt.Sprintf("A%d", i)
+			expr := fmt.Sprintf("=A%d+A%d", i-2, i-1)
+			assert.NoError(t, s.SetCellValue(cell, expr))
+		}
+
+		assertCellValue(t, s, "A14", 233)
+	})
+
+	t.Run("circref tiny cycle", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		assert.NoError(t, s.SetCellValue("A1", "=A2"))
+		assert.ErrorIs(t, s.SetCellValue("A2", "=A1"), ErrCircRef)
+	})
+
+	t.Run("circref selfref", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		assert.ErrorIs(t, s.SetCellValue("A1", "=A1"), ErrCircRef)
+	})
+
+	t.Run("big cycle", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		for i := 1; i <= 15; i++ {
+			cell1 := fmt.Sprintf("A%d", i)
+			cell2 := fmt.Sprintf("=A%d", i+1)
+			assert.NoError(t, s.SetCellValue(cell1, cell2))
+		}
+		assert.ErrorIs(t, s.SetCellValue("A15", "=A1"), ErrCircRef)
 	})
 }
 
