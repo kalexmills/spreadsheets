@@ -134,6 +134,11 @@ func parseUnary(tokens []Token) (Expr, []Token, error) {
 		if X, ok := X.(ConstExpr); ok { // small optimization to shorten the tree
 			return ConstExpr{Value: -X.Value}, rest, nil
 		}
+		if X, ok := X.(UnaryExpr); ok {
+			if X.Op == TokenSub {
+				return X.X, rest, nil // collapse double negation
+			}
+		}
 		return UnaryExpr{X: X, Op: TokenSub}, rest, nil
 	}
 	return parsePrimary(tokens)

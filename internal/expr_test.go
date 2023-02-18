@@ -43,17 +43,17 @@ func Test_ParseExpr(t *testing.T) {
 		{
 			name:     "unary expr",
 			input:    "=-123",
-			expected: neg(val(123)),
+			expected: val(-123),
 		},
 		{
 			name:     "multiply a negative",
 			input:    "=-123*-456",
-			expected: mul(neg(val(123)), neg(val(456))),
+			expected: mul(val(-123), val(-456)),
 		},
 		{
 			name:     "subtract from a negative",
 			input:    "=-123-456",
-			expected: sub(neg(val(123)), val(456)),
+			expected: sub(val(-123), val(456)),
 		},
 		{
 			name:     "division",
@@ -74,6 +74,11 @@ func Test_ParseExpr(t *testing.T) {
 			name:     "negation chain",
 			input:    "=-------4", // weird, right?
 			expected: val(-4),
+		},
+		{
+			name:     "negation chain",
+			input:    "=-------A1", // weird, right?
+			expected: neg(cellRef(0, 0)),
 		},
 	}
 	for _, tt := range tests {
