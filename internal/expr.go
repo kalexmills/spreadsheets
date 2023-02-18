@@ -11,7 +11,14 @@ func ParseExpr(str string) (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseExpr(tokens)
+	expr, rest, err := parseExpr(tokens)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("unexpected end of expression")
+	}
+	return expr, nil
 }
 
 var runeMap = map[rune]Token{
@@ -65,65 +72,41 @@ func between(target rune, lb, ub rune) bool {
 	return lb <= target && target <= ub
 }
 
-func parseExpr(tokens []Token) (Expr, error) {
-	expr, rest, err := parseTerm(tokens)
-	if err != nil {
-		return nil, err
-	}
-	if len(rest) != 0 {
-		return nil, fmt.Errorf("unexpected end of expression")
-	}
-	return expr, nil
+// parseExpr parses out an entire expression.
+func parseExpr(tokens []Token) (Expr, []Token, error) {
+	return parseTerm(tokens)
 }
 
+// parseTerm parses out addition and subtraction.
 func parseTerm(tokens []Token) (Expr, []Token, error) {
 	var termTokens = map[Token]struct{}{TokenAdd: {}, TokenSub: {}}
-
-	var Y Expr
-
-	// parse out the LHS
-	expr, rest, err := parseFactor2(tokens)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(rest) == 0 {
-		return expr, nil, nil
-	}
-	// parse out as many term expressions as possible
-	token := rest[0]
-	_, ok := termTokens[token]
-	for ok {
-		Y, rest, err = parseFactor2(rest[1:])
-		if err != nil {
-			return nil, nil, err
-		}
-		expr = BinaryExpr{X: expr, Op: token, Y: Y}
-		if len(rest) == 0 {
-			break
-		}
-		token = rest[0]
-		_, ok = termTokens[token]
-	}
-	return expr, rest, nil
+	return parseBinExpr(tokens, termTokens, parseFactor)
 }
 
-func parseFactor2(tokens []Token) (Expr, []Token, error) {
+// parseFactor parses out multiplication and division.
+func parseFactor(tokens []Token) (Expr, []Token, error) {
 	var factorTokens = map[Token]struct{}{TokenMul: {}, TokenDiv: {}}
+	return parseBinExpr(tokens, factorTokens, parseUnary)
+}
+
+// parseBinExpr parses a binary expression using the provided operations, calling the next parsing function.
+func parseBinExpr(tokens []Token, validOps map[Token]struct{}, next func([]Token) (Expr, []Token, error)) (Expr, []Token, error) {
 	var Y Expr
 
 	// parse out the LHS
-	expr, rest, err := parseUnary2(tokens)
+	expr, rest, err := next(tokens)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(rest) == 0 {
 		return expr, nil, err
 	}
+	fmt.Println("rest: ", rest)
 	// continue parsing out as many factor expressions as possible
 	token := rest[0]
-	_, ok := factorTokens[token]
+	_, ok := validOps[token]
 	for ok {
-		Y, rest, err = parseUnary2(rest[1:])
+		Y, rest, err = next(rest[1:])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -132,26 +115,28 @@ func parseFactor2(tokens []Token) (Expr, []Token, error) {
 			break
 		}
 		token = rest[0]
-		_, ok = factorTokens[token]
+		_, ok = validOps[token]
 	}
 	return expr, rest, nil
 }
 
-func parseUnary2(tokens []Token) (Expr, []Token, error) {
+// parseUnary parses out unary operators.
+func parseUnary(tokens []Token) (Expr, []Token, error) {
 	if len(tokens) == 0 {
-		return nil, nil, fmt.Errorf("%w: expected terms; found nothin", ErrExprParse)
+		return nil, nil, fmt.Errorf("%w: expected terms; found nothing", ErrExprParse)
 	}
 	if tokens[0] == TokenSub {
-		X, rest, err := parseUnary2(tokens[1:])
+		X, rest, err := parseUnary(tokens[1:])
 		if err != nil {
 			return nil, nil, err
 		}
 		return UnaryExpr{X: X, Op: TokenSub}, rest, nil
 	}
-	return parsePrimary2(tokens)
+	return parsePrimary(tokens)
 }
 
-func parsePrimary2(tokens []Token) (Expr, []Token, error) {
+// parsePrimary parses out primary expressions, terms, parenthesized terms, etc.
+func parsePrimary(tokens []Token) (Expr, []Token, error) {
 	if len(tokens) == 0 {
 		return nil, nil, fmt.Errorf("%w: expected terms; found nothing", ErrExprParse)
 	}
