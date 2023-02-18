@@ -26,6 +26,8 @@ var runeMap = map[rune]Token{
 	'-': TokenSub,
 	'*': TokenMul,
 	'/': TokenDiv,
+	'(': TokenLPar,
+	')': TokenRPar,
 }
 
 // tokenize tokenizes the provided expression into a list of tokens, returning a ErrExprParse if any unexpected
@@ -40,7 +42,6 @@ func tokenize(str string) ([]Token, error) {
 		for runes[i] == ' ' { // skip whitespace
 			i++
 		}
-
 		if between(runes[i], '0', '9') {
 			// tokenize constant integer expression
 			start := i
@@ -130,6 +131,9 @@ func parseUnary(tokens []Token) (Expr, []Token, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		if X, ok := X.(ConstExpr); ok { // small optimization to shorten the tree
+			return ConstExpr{Value: -X.Value}, rest, nil
+		}
 		return UnaryExpr{X: X, Op: TokenSub}, rest, nil
 	}
 	return parsePrimary(tokens)
@@ -145,6 +149,16 @@ func parsePrimary(tokens []Token) (Expr, []Token, error) {
 	}
 	if val, err := strconv.Atoi(string(tokens[0])); err == nil {
 		return ConstExpr{Value: val}, tokens[1:], nil
+	}
+	if tokens[0] == TokenLPar {
+		expr, rest, err := parseExpr(tokens[1:])
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(rest) == 0 || rest[0] != TokenRPar {
+			return nil, nil, fmt.Errorf("expected ')'")
+		}
+		return expr, rest[1:], nil
 	}
 	return nil, nil, fmt.Errorf("%w: unexpected token: %s", ErrExprParse, tokens[0])
 }
@@ -187,10 +201,12 @@ func (b CellRefExpr) IsExpr() {}
 type Token string
 
 const (
-	TokenAdd Token = "+"
-	TokenSub       = "-"
-	TokenMul       = "*"
-	TokenDiv       = "/"
+	TokenAdd  Token = "+"
+	TokenSub        = "-"
+	TokenMul        = "*"
+	TokenDiv        = "/"
+	TokenRPar       = ")"
+	TokenLPar       = "("
 )
 
 // CellRefs retrieves all cell references which are found in the expression.

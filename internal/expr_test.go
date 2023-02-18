@@ -65,6 +65,16 @@ func Test_ParseExpr(t *testing.T) {
 			input:   "=A1*",
 			wantErr: true,
 		},
+		{
+			name:     "paren",
+			input:    "=(-1*A3)/(-1*A4)",
+			expected: div(mul(val(-1), cellRef(0, 2)), mul(val(-1), cellRef(0, 3))),
+		},
+		{
+			name:     "negation chain",
+			input:    "=-------4", // weird, right?
+			expected: val(-4),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
