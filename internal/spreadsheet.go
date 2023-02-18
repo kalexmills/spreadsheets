@@ -102,6 +102,11 @@ func (s *Spreadsheet) eval(cid CellID) int {
 // topological order during refresh. evalExpr does not track circular references on its own.
 func (s *Spreadsheet) evalExpr(expr Expr) int {
 	switch expr := expr.(type) {
+	case UnaryExpr:
+		if expr.Op == TokenSub {
+			x := s.evalExpr(expr.X)
+			return -x
+		}
 	case BinaryExpr:
 		x := s.evalExpr(expr.X)
 		y := s.evalExpr(expr.Y)
@@ -110,6 +115,13 @@ func (s *Spreadsheet) evalExpr(expr Expr) int {
 			return x + y
 		case TokenMul:
 			return x * y
+		case TokenSub:
+			return x - y
+		case TokenDiv:
+			if y == 0 {
+				return 0 // refuse to divide by zero TODO: alert the user; like a circ ref
+			}
+			return x / y
 		}
 	case ConstExpr:
 		return expr.Value
@@ -151,7 +163,7 @@ func (s *Spreadsheet) refresh(cid CellID) error {
 	order, err := s.topSort(roots)
 	if err != nil {
 		return err // circular reference detected; bail!
-		// TODO: be more user-friendly like Excel and allow circular references to exist without throwing an error.
+		// FIXME: be more user-friendly like Excel and allow circular references to exist without throwing an error.
 	}
 
 	// re-evaluate all the cells found in topological order.
@@ -202,8 +214,11 @@ func (s *Spreadsheet) rootReferrers(cid CellID) []CellID {
 	return startCells
 }
 
+// ErrCircRef is returned whenever a circular reference is added.
 var ErrCircRef = errors.New("circular reference detected")
 
+// topSort implements a topological sort. Only nodes reachable from the provided startNodes will be sorted and included
+// in the output.
 func (s *Spreadsheet) topSort(startNodes []CellID) ([]CellID, error) {
 	var result []CellID
 

@@ -36,16 +36,34 @@ func Test_ParseExpr(t *testing.T) {
 			),
 		},
 		{
-			name:  "complex formula",
-			input: "=123 + C4*32 + B33*5 + 354",
-			expected: add(val(123),
-				add(
-					mul(cellRef(2, 3), val(32)),
-					add(
-						mul(cellRef(1, 32), val(5)),
-						val(354),
-					)),
-			),
+			name:     "complex formula",
+			input:    "=123 + C4*32 + B33*5 + 354",
+			expected: add(add(add(val(123), mul(cellRef(2, 3), val(32))), mul(cellRef(1, 32), val(5))), val(354)),
+		},
+		{
+			name:     "unary expr",
+			input:    "=-123",
+			expected: neg(val(123)),
+		},
+		{
+			name:     "multiply a negative",
+			input:    "=-123*-456",
+			expected: mul(neg(val(123)), neg(val(456))),
+		},
+		{
+			name:     "subtract from a negative",
+			input:    "=-123-456",
+			expected: sub(neg(val(123)), val(456)),
+		},
+		{
+			name:     "division",
+			input:    "=A1/B2/C3/D4",
+			expected: div(div(div(cellRef(0, 0), cellRef(1, 1)), cellRef(2, 2)), cellRef(3, 3)),
+		},
+		{
+			name:    "bad expr",
+			input:   "=A1*",
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -61,6 +79,10 @@ func Test_ParseExpr(t *testing.T) {
 	}
 }
 
+func sub(X, Y Expr) Expr {
+	return BinaryExpr{X: X, Y: Y, Op: TokenSub}
+}
+
 func add(X, Y Expr) Expr {
 	return BinaryExpr{X: X, Y: Y, Op: TokenAdd}
 }
@@ -69,10 +91,17 @@ func mul(X, Y Expr) Expr {
 	return BinaryExpr{X: X, Y: Y, Op: TokenMul}
 }
 
+func div(X, Y Expr) Expr {
+	return BinaryExpr{X: X, Y: Y, Op: TokenDiv}
+}
+
 func val(x int) Expr {
 	return ConstExpr{Value: x}
 }
 
 func cellRef(row, col int) Expr {
 	return CellRefExpr{Ref: CellID{row: row, column: col}}
+}
+func neg(X Expr) Expr {
+	return UnaryExpr{X: X, Op: TokenSub}
 }

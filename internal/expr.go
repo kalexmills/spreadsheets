@@ -14,6 +14,13 @@ func ParseExpr(str string) (Expr, error) {
 	return parseExpr(tokens)
 }
 
+var runeMap = map[rune]Token{
+	'+': TokenAdd,
+	'-': TokenSub,
+	'*': TokenMul,
+	'/': TokenDiv,
+}
+
 // tokenize tokenizes the provided expression into a list of tokens, returning a ErrExprParse if any unexpected
 // characters are found.
 func tokenize(str string) ([]Token, error) {
@@ -26,7 +33,9 @@ func tokenize(str string) ([]Token, error) {
 		for runes[i] == ' ' { // skip whitespace
 			i++
 		}
+
 		if between(runes[i], '0', '9') {
+			// tokenize constant integer expression
 			start := i
 			for i < len(runes) && between(runes[i], '0', '9') {
 				i++
@@ -34,16 +43,16 @@ func tokenize(str string) ([]Token, error) {
 			tokens = append(tokens, Token(runes[start:i]))
 			i--
 		} else if between(runes[i], 'A', 'Z') {
+			// tokenize cell reference
 			start := i
 			for i < len(runes) && (between(runes[i], '0', '9') || between(runes[i], 'A', 'Z')) {
 				i++
 			}
 			tokens = append(tokens, Token(runes[start:i]))
 			i--
-		} else if runes[i] == '*' {
-			tokens = append(tokens, TokenMul)
-		} else if runes[i] == '+' {
-			tokens = append(tokens, TokenAdd)
+
+		} else if token, ok := runeMap[runes[i]]; ok {
+			tokens = append(tokens, token)
 		} else {
 			return nil, fmt.Errorf("%w: unexpected character '%c'", ErrExprParse, runes[i])
 		}
@@ -56,57 +65,103 @@ func between(target rune, lb, ub rune) bool {
 	return lb <= target && target <= ub
 }
 
-// parseExpr parses the provided list of tokens into an expression.
 func parseExpr(tokens []Token) (Expr, error) {
-	// we're using a recursive descent parser because they're easy to understand, write, and extend.
-	if len(tokens) == 0 {
-		return nil, fmt.Errorf("%w: expected expression; found nothing", ErrExprParse)
+	expr, rest, err := parseTerm(tokens)
+	if err != nil {
+		return nil, err
 	}
-	return parseAdd(tokens)
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("unexpected end of expression")
+	}
+	return expr, nil
 }
 
-func parseMul(tokens []Token) (Expr, error) {
-	for i := 0; i < len(tokens)-1; i++ {
-		if tokens[i] == TokenMul {
-			return binExpr(i, tokens, TokenMul)
+func parseTerm(tokens []Token) (Expr, []Token, error) {
+	var termTokens = map[Token]struct{}{TokenAdd: {}, TokenSub: {}}
+
+	var Y Expr
+
+	// parse out the LHS
+	expr, rest, err := parseFactor2(tokens)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rest) == 0 {
+		return expr, nil, nil
+	}
+	// parse out as many term expressions as possible
+	token := rest[0]
+	_, ok := termTokens[token]
+	for ok {
+		Y, rest, err = parseFactor2(rest[1:])
+		if err != nil {
+			return nil, nil, err
 		}
-	}
-	return parseTerms(tokens)
-}
-
-func parseAdd(tokens []Token) (Expr, error) {
-	for i := 0; i < len(tokens)-1; i++ {
-		if tokens[i] == TokenAdd {
-			return binExpr(i, tokens, TokenAdd)
+		expr = BinaryExpr{X: expr, Op: token, Y: Y}
+		if len(rest) == 0 {
+			break
 		}
+		token = rest[0]
+		_, ok = termTokens[token]
 	}
-	return parseMul(tokens)
+	return expr, rest, nil
 }
 
-func parseTerms(tokens []Token) (Expr, error) {
+func parseFactor2(tokens []Token) (Expr, []Token, error) {
+	var factorTokens = map[Token]struct{}{TokenMul: {}, TokenDiv: {}}
+	var Y Expr
+
+	// parse out the LHS
+	expr, rest, err := parseUnary2(tokens)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rest) == 0 {
+		return expr, nil, err
+	}
+	// continue parsing out as many factor expressions as possible
+	token := rest[0]
+	_, ok := factorTokens[token]
+	for ok {
+		Y, rest, err = parseUnary2(rest[1:])
+		if err != nil {
+			return nil, nil, err
+		}
+		expr = BinaryExpr{X: expr, Op: token, Y: Y}
+		if len(rest) == 0 {
+			break
+		}
+		token = rest[0]
+		_, ok = factorTokens[token]
+	}
+	return expr, rest, nil
+}
+
+func parseUnary2(tokens []Token) (Expr, []Token, error) {
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("%w: expected terms; found nothing", ErrExprParse)
+		return nil, nil, fmt.Errorf("%w: expected terms; found nothin", ErrExprParse)
+	}
+	if tokens[0] == TokenSub {
+		X, rest, err := parseUnary2(tokens[1:])
+		if err != nil {
+			return nil, nil, err
+		}
+		return UnaryExpr{X: X, Op: TokenSub}, rest, nil
+	}
+	return parsePrimary2(tokens)
+}
+
+func parsePrimary2(tokens []Token) (Expr, []Token, error) {
+	if len(tokens) == 0 {
+		return nil, nil, fmt.Errorf("%w: expected terms; found nothing", ErrExprParse)
 	}
 	if cellID, err := ParseCellID(string(tokens[0])); err == nil {
-		return CellRefExpr{Ref: cellID}, nil
+		return CellRefExpr{Ref: cellID}, tokens[1:], nil
 	}
 	if val, err := strconv.Atoi(string(tokens[0])); err == nil {
-		return ConstExpr{Value: val}, nil
+		return ConstExpr{Value: val}, tokens[1:], nil
 	}
-	return nil, fmt.Errorf("%w: unexpected token: %s", ErrExprParse, tokens[0])
-}
-
-// binExpr splits the tokens at index i, continues parsing, and returns a BinaryExpr using the provided binOp.
-func binExpr(i int, tokens []Token, binOp Token) (Expr, error) {
-	X, err := parseExpr(tokens[:i])
-	if err != nil {
-		return nil, err
-	}
-	Y, err := parseExpr(tokens[i+1:])
-	if err != nil {
-		return nil, err
-	}
-	return BinaryExpr{X: X, Op: binOp, Y: Y}, nil
+	return nil, nil, fmt.Errorf("%w: unexpected token: %s", ErrExprParse, tokens[0])
 }
 
 // the model used here for representing parse trees is inspired by the ast package in Go's standard library.
@@ -114,6 +169,11 @@ func binExpr(i int, tokens []Token, binOp Token) (Expr, error) {
 // Expr is an interface describing an expression.
 type Expr interface {
 	IsExpr() // marker method, just for type-safety.
+}
+
+type UnaryExpr struct {
+	X  Expr  // term
+	Op Token // operation
 }
 
 // BinaryExpr represents a binary expression, containing a token representing the operation, and left and right
@@ -124,27 +184,28 @@ type BinaryExpr struct {
 	Y  Expr  // right operand
 }
 
-func (b BinaryExpr) IsExpr() {}
-
 // ConstExpr represents a constant valued expression.
 type ConstExpr struct {
 	Value int
 }
-
-func (b ConstExpr) IsExpr() {}
 
 // CellRefExpr represents a variable reference to another cell.
 type CellRefExpr struct {
 	Ref CellID
 }
 
+func (b ConstExpr) IsExpr()   {}
+func (u UnaryExpr) IsExpr()   {}
+func (b BinaryExpr) IsExpr()  {}
 func (b CellRefExpr) IsExpr() {}
 
 type Token string
 
 const (
 	TokenAdd Token = "+"
+	TokenSub       = "-"
 	TokenMul       = "*"
+	TokenDiv       = "/"
 )
 
 // CellRefs retrieves all cell references which are found in the expression.

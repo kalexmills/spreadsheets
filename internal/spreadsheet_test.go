@@ -79,6 +79,17 @@ func TestSpreadsheet(t *testing.T) {
 		}
 		assert.ErrorIs(t, s.SetCellValue("A15", "=A1"), ErrCircRef)
 	})
+
+	t.Run("complex expression", func(t *testing.T) {
+		s := NewSpreadsheet()
+
+		assert.NoError(t, s.SetCellValue("A1", "=B1*B2+C1/-C1-3"))
+		assert.NoError(t, s.SetCellValue("B1", 12))
+		assert.NoError(t, s.SetCellValue("B2", 4))
+		assert.NoError(t, s.SetCellValue("C1", 12))
+
+		assertCellValue(t, s, "A1", 44)
+	})
 }
 
 func assertCellValue(t *testing.T, s *Spreadsheet, cellID string, expectedValue int) {
